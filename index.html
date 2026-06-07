@@ -16,6 +16,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 
 <style>
 /* ══════════════════════════════════════════
@@ -303,16 +304,15 @@ body::after {
 .code-textarea { color: transparent; background: transparent; caret-color: var(--primary); resize: none; overflow: auto; z-index: 2; }
 .code-highlight { color: #E2E8F0; background: transparent; overflow: hidden; pointer-events: none; z-index: 1; }
 
-.tok-kw  { color: #C678DD; font-weight: 500; }
-.tok-fn  { color: #61AFEF; }
-.tok-str { color: #98C379; }
-.tok-num { color: #D19A66; }
-.tok-cmt { color: #5C6370; font-style: italic; }
-.tok-type{ color: #E5C07B; }
-.tok-tag { color: #E06C75; }
-.tok-attr{ color: #D19A66; }
-.tok-val { color: #98C379; }
-.tok-key { color: #56B6C2; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-variable.language_ { color: #C678DD; font-weight: 500; }
+.hljs-title, .hljs-title.function_, .hljs-function { color: #61AFEF; }
+.hljs-string, .hljs-regexp { color: #98C379; }
+.hljs-number { color: #D19A66; }
+.hljs-comment { color: #5C6370; font-style: italic; }
+.hljs-type, .hljs-built_in { color: #E5C07B; }
+.hljs-tag, .hljs-name { color: #E06C75; }
+.hljs-attr, .hljs-attribute { color: #D19A66; }
+.hljs-symbol, .hljs-bullet { color: #56B6C2; }
 
 .recv-row { display: flex; gap: 16px; align-items: stretch; }
 .or-divider { display:flex; align-items:center; gap:20px; margin:30px 0; color:var(--text-muted); font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:3px; }
@@ -328,8 +328,8 @@ body::after {
 
 /* ══ ABOUT MODAL STYLES ══ */
 .about-scroll { max-height: 75vh; overflow-y: auto; padding-right: 8px; }
-.about-scroll::-webkit-scrollbar { width: 4px; }
-.about-scroll::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
+.about-scroll::-webkit-scrollbar, .preview-list::-webkit-scrollbar, #recv-files-list::-webkit-scrollbar { width: 4px; }
+.about-scroll::-webkit-scrollbar-thumb, .preview-list::-webkit-scrollbar-thumb, #recv-files-list::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
 .dev-profile { display: flex; align-items: center; gap: 16px; background: rgba(0,0,0,0.4); padding: 16px; border-radius: var(--radius-md); border: 1px solid rgba(255,255,255,0.05); margin-top: 16px; flex-wrap: wrap; }
 .dev-avatar { width: 80px; height: 80px; border-radius: 50%; border: 2px solid var(--primary); box-shadow: 0 0 15px var(--primary-glow); object-fit: cover; object-position: center top; flex-shrink: 0; }
 .dev-info { flex: 1; min-width: 200px; }
@@ -405,19 +405,20 @@ body::after {
       </div>
       <div class="md-card-body">
         <div class="drop-zone" id="drop-zone">
-          <input type="file" id="file-input" onchange="handleFileSelect(this.files[0])">
+          <input type="file" id="file-input" multiple onchange="handleFileSelect(this.files)">
           <div class="drop-zone-icon"><span class="material-icons-round">cloud_upload</span></div>
-          <div class="drop-zone-title">Drag & Drop file here</div>
+          <div class="drop-zone-title">Drag & Drop files here</div>
           <div class="drop-zone-sub">or click to browse your device</div>
         </div>
 
-        <div class="file-preview-row hidden" id="file-preview">
-          <div class="md-card-header-icon" style="background:var(--primary-light); box-shadow: 0 0 15px rgba(0,229,255,0.2)"><span class="material-icons-round">insert_drive_file</span></div>
-          <div class="file-info">
-            <div class="file-name" id="preview-name">—</div>
-            <div class="file-size" id="preview-size">—</div>
+        <div class="file-preview-container hidden" id="file-preview-container">
+          <div class="preview-list" id="preview-list" style="max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-top: 16px;">
+            <!-- Dynamically populated files -->
           </div>
-          <button class="file-remove" onclick="clearFile()" title="Remove file"><span class="material-icons-round">close</span></button>
+          <div class="file-preview-summary" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: rgba(0,0,0,0.3); border: 1px dashed rgba(255,255,255,0.1); border-radius: var(--radius-sm); margin-top: 16px; font-size: 14px; font-weight: 500;">
+            <div style="color: var(--text-main);"><span id="summary-count">0</span> files selected</div>
+            <div style="color: var(--primary); font-family: var(--font-mono);" id="summary-size">0 B</div>
+          </div>
         </div>
       </div>
     </div>
@@ -560,8 +561,11 @@ body::after {
           <div class="success-burst" id="recv-success">
             <div class="burst-icon"><img src="https://i.ibb.co/rKnmYqjq/Sync-Drop.png" class="app-logo" alt="Done"></div>
             <div class="burst-title" id="recv-done-name">File Ready!</div>
-            <div class="burst-meta" id="recv-done-meta"></div>
-            <button class="md-btn md-btn-filled" style="margin-top:24px" onclick="downloadFile()">
+            <div class="burst-meta" id="recv-done-meta" style="margin-bottom: 20px;"></div>
+            
+            <div id="recv-files-list" class="hidden" style="width: 100%; display: flex; flex-direction: column; gap: 10px; margin-bottom: 24px; max-height: 250px; overflow-y: auto; padding-right: 4px;"></div>
+            
+            <button class="md-btn md-btn-filled" style="margin-top:24px" onclick="downloadFile()" id="recv-single-save-btn">
               <span class="material-icons-round">save_alt</span> SAVE TO DEVICE
             </button>
           </div>
@@ -578,15 +582,7 @@ body::after {
       <div class="editor-topbar">
         <div class="editor-controls">
           <div class="window-dots"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
-          <select class="lang-select" id="lang-select" onchange="onLangChange()">
-            <option value="javascript">JavaScript</option>
-            <option value="python">Python</option>
-            <option value="html">HTML</option>
-            <option value="css">CSS</option>
-            <option value="json">JSON</option>
-            <option value="c">C/C++</option>
-            <option value="plaintext">Plain Text</option>
-          </select>
+          <span style="font-family: var(--font-sans); font-size: 14px; color: var(--primary); font-weight: 600; letter-spacing: 0.5px;" id="editor-lang-label">AUTO-DETECT: PLAIN TEXT</span>
         </div>
         <button class="copy-btn" onclick="clearCodeEditor()" style="padding: 6px 14px; background: transparent; border-color: transparent;"><span class="material-icons-round" style="font-size:16px">delete_outline</span> CLEAR</button>
       </div>
@@ -761,8 +757,9 @@ const ICE_CONFIG = {
 };
 
 let myPeer = null, receiverPeer = null, activeConn = null;
-let selectedFile = null;
-let receivedChunks = [], receivedMeta = null, totalReceived = 0;
+let selectedFiles = [];
+let receivedFiles = [], receivedBatchMeta = null, totalBatchSize = 0, totalBatchReceived = 0;
+let currentFileChunks = [], currentFileMeta = null;
 let qrVisible = false, qrGenerated = false;
 let currentLang = 'javascript';
 let receivedCodeData = null;
@@ -791,23 +788,78 @@ function switchTab(t) {
 const dz = document.getElementById('drop-zone');
 window.addEventListener('dragover', e => { e.preventDefault(); if(document.getElementById('panel-send').classList.contains('active')) dz.classList.add('dragover'); });
 window.addEventListener('dragleave', e => { if(e.target === document.documentElement || e.relatedTarget === null) dz.classList.remove('dragover'); });
-window.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('dragover'); if(e.dataTransfer.files[0] && document.getElementById('panel-send').classList.contains('active')) handleFileSelect(e.dataTransfer.files[0]); });
+window.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('dragover'); if(e.dataTransfer.files.length && document.getElementById('panel-send').classList.contains('active')) handleFileSelect(e.dataTransfer.files); });
 
-function handleFileSelect(file){
-  if(!file) return;
-  if(file.size > MAX_SIZE){ alert(`File too large. Max size is ${fmtBytes(MAX_SIZE)}.`); return; }
-  selectedFile = file;
-  document.getElementById('preview-name').textContent = file.name;
-  document.getElementById('preview-size').textContent = fmtBytes(file.size);
-  document.getElementById('file-preview').classList.remove('hidden');
-  document.getElementById('send-action-card').classList.remove('hidden');
-}
-function clearFile(){
-  selectedFile = null;
-  document.getElementById('file-preview').classList.add('hidden');
-  document.getElementById('send-action-card').classList.add('hidden');
-  document.getElementById('file-input').value = '';
+function handleFileSelect(files){
+  if(!files || files.length === 0) return;
+  const filesArray = files.length !== undefined ? Array.from(files) : [files];
+  
+  for (const file of filesArray) {
+    if (file.size > MAX_SIZE) {
+      alert(`File "${file.name}" is too large. Max size is ${fmtBytes(MAX_SIZE)}.`);
+      continue;
+    }
+    if (selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
+      continue;
+    }
+    selectedFiles.push(file);
+  }
+  
+  updateFilePreviewList();
   cancelTransfer();
+}
+
+function updateFilePreviewList() {
+  const container = document.getElementById('file-preview-container');
+  const list = document.getElementById('preview-list');
+  const countEl = document.getElementById('summary-count');
+  const sizeEl = document.getElementById('summary-size');
+  
+  if (selectedFiles.length === 0) {
+    container.classList.add('hidden');
+    document.getElementById('send-action-card').classList.add('hidden');
+    return;
+  }
+  
+  container.classList.remove('hidden');
+  document.getElementById('send-action-card').classList.remove('hidden');
+  
+  list.innerHTML = '';
+  let totalSize = 0;
+  
+  selectedFiles.forEach((file, index) => {
+    totalSize += file.size;
+    const row = document.createElement('div');
+    row.className = 'file-preview-row';
+    row.style.padding = '10px 16px';
+    row.style.borderRadius = 'var(--radius-sm)';
+    row.style.marginTop = '0';
+    row.innerHTML = `
+      <div class="md-card-header-icon" style="background:var(--primary-light); box-shadow: 0 0 10px rgba(0,229,255,0.1); width: 32px; height: 32px; font-size: 16px;"><span class="material-icons-round" style="font-size:16px">insert_drive_file</span></div>
+      <div class="file-info" style="margin-left: 10px; text-align: left;">
+        <div class="file-name" style="font-size: 14px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${file.name}</div>
+        <div class="file-size" style="font-size: 11px; margin-top: 2px;">${fmtBytes(file.size)}</div>
+      </div>
+      <button class="file-remove" style="width: 28px; height: 28px; font-size: 14px;" onclick="removeSelectedFile(${index})" title="Remove file"><span class="material-icons-round" style="font-size:14px">close</span></button>
+    `;
+    list.appendChild(row);
+  });
+  
+  countEl.textContent = selectedFiles.length;
+  sizeEl.textContent = fmtBytes(totalSize);
+}
+
+function removeSelectedFile(index) {
+  selectedFiles.splice(index, 1);
+  updateFilePreviewList();
+  cancelTransfer();
+}
+
+function clearFile(){
+  selectedFiles = [];
+  updateFilePreviewList();
+  cancelTransfer();
+  document.getElementById('file-input').value = '';
 }
 
 // ── QR & COPY LINKS ───────────────────────────────────
@@ -859,8 +911,10 @@ function cancelTransfer() {
   if (receiverPeer) { receiverPeer.destroy(); receiverPeer = null; }
   activeConn = null;
   // Reset UI Send
-  document.getElementById('send-start-btn').disabled = false;
-  document.getElementById('send-start-btn').innerHTML = '<span class="material-icons-round">rocket_launch</span> GENERATE SYNC LINK';
+  const sendStartBtn = document.getElementById('send-start-btn');
+  sendStartBtn.disabled = false;
+  sendStartBtn.className = 'md-btn md-btn-filled md-btn-full';
+  sendStartBtn.innerHTML = '<span class="material-icons-round">rocket_launch</span> GENERATE SYNC LINK';
   document.getElementById('share-active-area').classList.add('hidden');
   document.getElementById('send-viz').classList.add('hidden');
   document.getElementById('send-status-row').className = 'md-status info';
@@ -869,6 +923,19 @@ function cancelTransfer() {
   // Reset UI Recv
   document.getElementById('recv-file-card').classList.add('hidden');
   document.getElementById('receive-status').classList.add('hidden');
+  document.getElementById('recv-success').classList.remove('visible');
+  
+  // Clear receiver lists
+  document.getElementById('recv-files-list').innerHTML = '';
+  document.getElementById('recv-files-list').classList.add('hidden');
+  document.getElementById('recv-single-save-btn').classList.add('hidden');
+  
+  setRing('send-ring', 0);
+  setRing('recv-ring', 0);
+  document.getElementById('send-pct').textContent = '0%';
+  document.getElementById('recv-pct').textContent = '0%';
+  document.getElementById('send-lbl').textContent = 'UPLOADING';
+  document.getElementById('recv-lbl').textContent = 'DOWNLOADING';
 }
 
 // ── DATA STREAM PARTICLES ─────────────────────────────
@@ -933,7 +1000,7 @@ function startDataStream(canvasId, mode) {
 
 // ── SEND FILE FLOW ────────────────────────────────────
 async function startSend(){
-  if(!selectedFile) return;
+  if(selectedFiles.length === 0) return;
   const btn = document.getElementById('send-start-btn');
   btn.disabled = true; btn.innerHTML = '<div class="logo-spinner"></div> PREPARING...';
   
@@ -972,43 +1039,101 @@ function setSendStatus(type, text){
 }
 
 function sendInChunks(conn){
-  const file = selectedFile; let offset = 0, lastTime = Date.now(), lastOff = 0;
-  const stopStream = startDataStream('send-canvas', 'send');
-  conn.send({type:'meta', name:file.name, size:file.size, mime:file.type});
+  const files = selectedFiles;
+  let fileIndex = 0;
+  let currentOffset = 0;
+  const totalSize = files.reduce((acc, f) => acc + f.size, 0);
+  let totalSent = 0;
   
-  function next(){
-    if(!activeConn || !activeConn.open) return; // Cancelled
-    if(offset >= file.size){ conn.send({type:'done'}); finishSend(stopStream, file); return; }
+  let lastTime = Date.now();
+  let lastTotalSent = 0;
+  const stopStream = startDataStream('send-canvas', 'send');
+  
+  // Send overall batch metadata
+  conn.send({
+    type: 'batch-meta',
+    count: files.length,
+    totalSize: totalSize,
+    files: files.map(f => ({ name: f.name, size: f.size, mime: f.type }))
+  });
+  
+  function startNextFile() {
+    if (fileIndex >= files.length) {
+      conn.send({type:'batch-done'});
+      finishSendBatch(stopStream, totalSize);
+      return;
+    }
     
-    const slice = file.slice(offset, offset + CHUNK_SIZE);
+    const file = files[fileIndex];
+    currentOffset = 0;
+    
+    conn.send({
+      type: 'file-start',
+      index: fileIndex,
+      name: file.name,
+      size: file.size,
+      mime: file.type
+    });
+    
+    sendFileChunk();
+  }
+  
+  function sendFileChunk(){
+    if(!activeConn || !activeConn.open) return; // Cancelled
+    
+    const file = files[fileIndex];
+    if(currentOffset >= file.size){
+      conn.send({type:'file-end', index: fileIndex});
+      fileIndex++;
+      setTimeout(startNextFile, 50); // Pause between files
+      return;
+    }
+    
+    const slice = file.slice(currentOffset, currentOffset + CHUNK_SIZE);
     const reader = new FileReader();
     reader.onload = e => {
       try { conn.send({type:'chunk', data:e.target.result}); } catch(err) { return; }
-      offset += CHUNK_SIZE;
+      currentOffset += slice.size;
+      totalSent += slice.size;
       
-      const now = Date.now(), iB = offset - lastOff, iS = (now - lastTime)/1000; 
-      lastOff = offset; lastTime = now;
-      const spd = iS > 0 ? iB/iS : 0, rem = file.size - offset, eta = spd > 0 ? rem/spd : Infinity;
-      const pct = Math.min(100, Math.round((offset/file.size)*100));
-      
-      setRing('send-ring', pct);
-      document.getElementById('send-pct').textContent = pct + '%';
-      document.getElementById('send-speed').textContent = fmtSpeed(spd);
-      document.getElementById('send-sent').textContent = fmtBytes(Math.min(offset, file.size));
-      document.getElementById('send-eta').textContent = fmtEta(eta);
+      const now = Date.now(), iS = (now - lastTime)/1000;
+      if (iS >= 0.5) {
+        const iB = totalSent - lastTotalSent;
+        const spd = iS > 0 ? iB/iS : 0, rem = totalSize - totalSent, eta = spd > 0 ? rem/spd : Infinity;
+        const pct = Math.min(100, Math.round((totalSent/totalSize)*100));
+        
+        setRing('send-ring', pct);
+        document.getElementById('send-pct').textContent = pct + '%';
+        document.getElementById('send-speed').textContent = fmtSpeed(spd);
+        document.getElementById('send-sent').textContent = fmtBytes(totalSent);
+        document.getElementById('send-eta').textContent = fmtEta(eta);
+        
+        lastTotalSent = totalSent;
+        lastTime = now;
+      } else {
+        const pct = Math.min(100, Math.round((totalSent/totalSize)*100));
+        setRing('send-ring', pct);
+        document.getElementById('send-pct').textContent = pct + '%';
+        document.getElementById('send-sent').textContent = fmtBytes(totalSent);
+      }
       
       if(conn.dataChannel && conn.dataChannel.bufferedAmount > BUFFER_THRESHOLD) {
-        setTimeout(next, 50); 
+        setTimeout(sendFileChunk, 50); 
       } else {
-        next();
+        if (currentOffset % (CHUNK_SIZE * 32) === 0) {
+          setTimeout(sendFileChunk, 0); // Unwind recursion
+        } else {
+          sendFileChunk();
+        }
       }
     };
     reader.readAsArrayBuffer(slice);
   }
-  next();
+  
+  startNextFile();
 }
 
-function finishSend(stopStream, file){
+function finishSendBatch(stopStream, totalSize){
   stopStream(); setRing('send-ring', 100);
   document.getElementById('send-pct').textContent = '100%'; document.getElementById('send-lbl').textContent = 'DONE';
   document.getElementById('send-eta').textContent = '0s';
@@ -1016,7 +1141,7 @@ function finishSend(stopStream, file){
   document.getElementById('send-stats').classList.add('hidden'); 
   document.getElementById('send-viz').querySelector('.hub-container').classList.add('hidden');
   document.getElementById('send-success').classList.add('visible');
-  document.getElementById('send-done-meta').textContent = file.name + ' · ' + fmtBytes(file.size);
+  document.getElementById('send-done-meta').textContent = selectedFiles.length + ' files · ' + fmtBytes(totalSize);
 }
 
 // ── RECEIVE FILE FLOW ─────────────────────────────────
@@ -1045,7 +1170,7 @@ function connectToSender(){
       listenForFile(conn);
     });
     conn.on('error', () => setRecvStatus('error','Connection failed. Check code.'));
-    setTimeout(()=>{ if(!conn.open) setRecvStatus('error','Could not reach sender. Timeout.'); }, 15000);
+    setTimeout(()=>{ if(!conn.open) setRecvStatus('error','Could not reach sender. Timeout.'); }, 30000);
   });
   receiverPeer.on('error', err => setRecvStatus('error', 'Network error.'));
 }
@@ -1057,33 +1182,98 @@ function setRecvStatus(type, text){
 }
 
 function listenForFile(conn){
-  receivedChunks = []; totalReceived = 0; receivedMeta = null;
+  receivedFiles = [];
+  currentFileChunks = [];
+  totalBatchReceived = 0;
+  receivedBatchMeta = null;
+  currentFileMeta = null;
+  
   let lastTime = Date.now(), lastRcv = 0;
   const stopStream = startDataStream('recv-canvas', 'recv');
   
   conn.on('data', msg => {
-    if(msg.type === 'meta'){ receivedMeta = msg; }
-    else if(msg.type === 'chunk'){
-      receivedChunks.push(msg.data); totalReceived += msg.data.byteLength;
-      if(receivedMeta){
-        const now = Date.now(), iB = totalReceived - lastRcv, iS = (now - lastTime)/1000; 
-        lastRcv = totalReceived; lastTime = now;
-        const spd = iS > 0 ? iB/iS : 0, rem = receivedMeta.size - totalReceived, eta = spd > 0 ? rem/spd : Infinity;
-        const pct = Math.min(100, Math.round((totalReceived/receivedMeta.size)*100));
+    if (msg.type === 'batch-meta') {
+      receivedBatchMeta = msg;
+      totalBatchSize = msg.totalSize;
+      document.getElementById('recv-lbl').textContent = 'DOWNLOADING';
+    } 
+    else if (msg.type === 'file-start') {
+      currentFileMeta = msg;
+      currentFileChunks = [];
+    } 
+    else if (msg.type === 'chunk') {
+      currentFileChunks.push(msg.data);
+      totalBatchReceived += msg.data.byteLength;
+      
+      const targetSize = receivedBatchMeta ? totalBatchSize : (currentFileMeta ? currentFileMeta.size : 1);
+      const now = Date.now(), iS = (now - lastTime)/1000;
+      if (iS >= 0.5) {
+        const iB = totalBatchReceived - lastRcv;
+        const spd = iS > 0 ? iB/iS : 0, rem = targetSize - totalBatchReceived, eta = spd > 0 ? rem/spd : Infinity;
+        const pct = Math.min(100, Math.round((totalBatchReceived / targetSize) * 100));
         
         setRing('recv-ring', pct);
         document.getElementById('recv-pct').textContent = pct + '%';
         document.getElementById('recv-speed').textContent = fmtSpeed(spd);
-        document.getElementById('recv-got').textContent = fmtBytes(totalReceived);
+        document.getElementById('recv-got').textContent = fmtBytes(totalBatchReceived);
         document.getElementById('recv-eta').textContent = fmtEta(eta);
+        
+        lastRcv = totalBatchReceived;
+        lastTime = now;
+      } else {
+        const pct = Math.min(100, Math.round((totalBatchReceived / targetSize) * 100));
+        setRing('recv-ring', pct);
+        document.getElementById('recv-pct').textContent = pct + '%';
+        document.getElementById('recv-got').textContent = fmtBytes(totalBatchReceived);
       }
+    } 
+    else if (msg.type === 'file-end') {
+      if (currentFileMeta) {
+        const blob = new Blob(currentFileChunks, { type: currentFileMeta.mime || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        receivedFiles.push({
+          name: currentFileMeta.name,
+          size: currentFileMeta.size,
+          mime: currentFileMeta.mime,
+          blob: blob,
+          url: url
+        });
+      }
+    } 
+    else if (msg.type === 'batch-done') {
+      finishReceiveBatch(stopStream);
     }
-    else if(msg.type === 'done') finishReceive(stopStream);
+    // Backward compatibility for old single-file senders
+    else if (msg.type === 'meta') {
+      receivedBatchMeta = { count: 1, totalSize: msg.size, files: [msg] };
+      totalBatchSize = msg.size;
+      currentFileMeta = msg;
+      currentFileChunks = [];
+    } 
+    else if (msg.type === 'done') {
+      if (currentFileMeta) {
+        const blob = new Blob(currentFileChunks, { type: currentFileMeta.mime || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        receivedFiles.push({
+          name: currentFileMeta.name,
+          size: currentFileMeta.size,
+          mime: currentFileMeta.mime,
+          blob: blob,
+          url: url
+        });
+      }
+      finishReceiveBatch(stopStream);
+    }
   });
-  conn.on('close', () => { if(receivedMeta && receivedChunks.length && totalReceived >= receivedMeta.size) finishReceive(stopStream); });
+  
+  conn.on('close', () => {
+    if (totalBatchReceived >= totalBatchSize && receivedFiles.length > 0) {
+      finishReceiveBatch(stopStream);
+    }
+  });
 }
 
-function finishReceive(stopStream){
+function finishReceiveBatch(stopStream){
   stopStream(); setRing('recv-ring', 100);
   document.getElementById('recv-pct').textContent = '100%'; document.getElementById('recv-lbl').textContent = 'DONE';
   document.getElementById('recv-eta').textContent = '0s';
@@ -1091,19 +1281,58 @@ function finishReceive(stopStream){
   document.getElementById('recv-stats').classList.add('hidden');
   document.getElementById('recv-ring-container').classList.add('hidden');
   
-  const name = receivedMeta ? receivedMeta.name : 'received-file';
-  const size = receivedMeta ? fmtBytes(receivedMeta.size) : '';
-  document.getElementById('recv-done-name').textContent = name;
-  document.getElementById('recv-done-meta').textContent = size;
+  const filesListEl = document.getElementById('recv-files-list');
+  filesListEl.innerHTML = '';
+  
+  if (receivedFiles.length === 1) {
+    document.getElementById('recv-done-name').textContent = receivedFiles[0].name;
+    document.getElementById('recv-done-meta').textContent = fmtBytes(receivedFiles[0].size);
+    document.getElementById('recv-single-save-btn').classList.remove('hidden');
+    filesListEl.classList.add('hidden');
+  } else {
+    document.getElementById('recv-done-name').textContent = 'Sync Complete!';
+    document.getElementById('recv-done-meta').textContent = receivedFiles.length + ' files received · ' + fmtBytes(totalBatchSize);
+    document.getElementById('recv-single-save-btn').classList.add('hidden');
+    filesListEl.classList.remove('hidden');
+    
+    receivedFiles.forEach((file, index) => {
+      const row = document.createElement('div');
+      row.className = 'file-preview-row';
+      row.style.padding = '10px 16px';
+      row.style.borderRadius = 'var(--radius-sm)';
+      row.style.marginTop = '0';
+      row.style.background = 'rgba(255, 255, 255, 0.03)';
+      row.style.border = '1px solid rgba(255, 255, 255, 0.05)';
+      row.innerHTML = `
+        <div class="md-card-header-icon" style="background:var(--primary-light); box-shadow: 0 0 10px rgba(0,229,255,0.1); width: 32px; height: 32px; font-size: 16px;"><span class="material-icons-round" style="font-size:16px">insert_drive_file</span></div>
+        <div class="file-info" style="margin-left: 10px; text-align: left;">
+          <div class="file-name" style="font-size: 14px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${file.name}</div>
+          <div class="file-size" style="font-size: 11px; margin-top: 2px;">${fmtBytes(file.size)}</div>
+        </div>
+        <button class="md-btn md-btn-filled" style="padding: 0 14px; height: 32px; font-size: 12px; border-radius: var(--radius-sm);" onclick="downloadBatchFile(${index})">
+          <span class="material-icons-round" style="font-size:14px">save_alt</span> SAVE
+        </button>
+      `;
+      filesListEl.appendChild(row);
+    });
+  }
+  
   document.getElementById('recv-success').classList.add('visible');
 }
 
 function downloadFile(){
-  if(!receivedChunks.length) return;
-  const mime = (receivedMeta && receivedMeta.mime) || 'application/octet-stream';
-  const blob = new Blob(receivedChunks, {type:mime});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = receivedMeta ? receivedMeta.name : 'received-file'; a.click(); URL.revokeObjectURL(url);
+  if(!receivedFiles.length) return;
+  const file = receivedFiles[0];
+  const a = document.createElement('a'); a.href = file.url; a.download = file.name; a.click();
+}
+
+function downloadBatchFile(index) {
+  const file = receivedFiles[index];
+  if (!file) return;
+  const a = document.createElement('a');
+  a.href = file.url;
+  a.download = file.name;
+  a.click();
 }
 
 // ── HTML5-QRCODE SCANNER ──────────────────────────────
@@ -1172,39 +1401,55 @@ function closeAbout() {
 }
 
 // ── CODE EDITOR & SYNTAX ──────────────────────────────
-function onLangChange() { currentLang = document.getElementById('lang-select').value; onCodeInput(); }
-
-const EXT_MAP={python:'py',javascript:'js',html:'html',css:'css',json:'json',c:'c',plaintext:'txt'};
-const LANG_RULES={
-  python:{comment:/^(#.*)$/m,string:/("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/,kw:/\b(False|None|True|and|as|assert|async|await|break|class|continue|def|del|elif|else|except|finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|try|while|with|yield)\b/,num:/\b(\d+\.?\d*(?:[eE][+-]?\d+)?)\b/,fn:/\b([a-zA-Z_]\w*)\s*(?=\()/,type:/\b(int|str|float|bool|list|dict|set|tuple|bytes|type|object|Exception)\b/},
-  javascript:{comment:/^(\/\/.*|\/\*[\s\S]*?\*\/)$/m,string:/(["'`](?:[^"'`\\]|\\.)*["'`])/,kw:/\b(async|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|export|extends|finally|for|from|function|if|import|in|instanceof|let|new|of|return|static|super|switch|throw|try|typeof|var|void|while|with|yield)\b/,num:/\b(\d+\.?\d*)\b/,fn:/\b([a-zA-Z_$][\w$]*)\s*(?=\()/,type:/\b(Array|Boolean|Date|Error|Function|JSON|Math|Number|Object|Promise|RegExp|String|Symbol|undefined|null|true|false)\b/},
-  c:{comment:/^(\/\/.*|\/\*[\s\S]*?\*\/)$/m,string:/(["'](?:[^"'\\]|\\.)*["'])/,kw:/\b(auto|break|case|char|const|continue|default|do|double|else|enum|extern|float|for|goto|if|int|long|register|return|short|signed|sizeof|static|struct|switch|typedef|union|unsigned|void|volatile|while)\b/,num:/\b(\d+\.?\d*(?:[uUlL]*|[fF])?)\b/,fn:/\b([a-zA-Z_]\w*)\s*(?=\()/,type:/\b(NULL|true|false|bool|size_t|FILE)\b/},
-  css:{comment:/^(\/\*[\s\S]*?\*\/)$/m,kw:/\b(important|media|keyframes|font-face)\b/,fn:/\b([a-zA-Z-]+)\s*(?=:)/,string:/(["'](?:[^"'\\]|\\.)*["'])/,num:/\b(\d+(?:px|em|rem|vh|vw|%|ms|s)?)\b/}
+const EXT_MAP = {
+  python: 'py',
+  javascript: 'js',
+  typescript: 'ts',
+  html: 'html',
+  css: 'css',
+  json: 'json',
+  c: 'c',
+  cpp: 'cpp',
+  java: 'java',
+  bash: 'sh',
+  sql: 'sql',
+  php: 'php',
+  rust: 'rs',
+  go: 'go',
+  ruby: 'rb',
+  plaintext: 'txt'
 };
-function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
-function highlight(code, lang){
-  if(lang === 'html') return code.replace(/<!--[\s\S]*?-->/g, m=>`<span class="tok-cmt">${escHtml(m)}</span>`).replace(/<(\/?[a-z0-9]+)([^>]*)>/gi, (m,t,a)=>`<span class="tok-kw">&lt;</span><span class="tok-tag">${t}</span>${a.replace(/([a-z-]+)=("[^"]*")/gi, ' <span class="tok-attr">$1</span>=<span class="tok-str">$2</span>')}<span class="tok-kw">&gt;</span>`);
-  if(lang === 'json') return code.replace(/("(?:[^"\\]|\\.)*")\s*:/g,'<span class="tok-key">$1</span>:').replace(/:\s*("(?:[^"\\]|\\.)*")/g,': <span class="tok-str">$1</span>').replace(/\b(true|false|null)\b/g,'<span class="tok-kw">$1</span>').replace(/:\s*(-?\d+\.?\d*(?:[eE][+-]?\d+)?)/g,': <span class="tok-num">$1</span>');
-  if(lang === 'plaintext') return escHtml(code);
-  
-  const rules = LANG_RULES[lang] || LANG_RULES.javascript;
-  return code.split('\n').map(line => {
-    let r = escHtml(line);
-    if(rules.comment) r = r.replace(new RegExp(rules.comment.source, 'gm'), m=>`<span class="tok-cmt">${m}</span>`);
-    if(rules.string) r = r.replace(new RegExp(rules.string.source, 'g'), m=>`<span class="tok-str">${m}</span>`);
-    if(rules.kw) r = r.replace(new RegExp(rules.kw.source, 'g'), m=>`<span class="tok-kw">${m}</span>`);
-    if(rules.fn) r = r.replace(new RegExp(rules.fn.source, 'g'), m=>`<span class="tok-fn">${m}</span>`);
-    if(rules.type) r = r.replace(new RegExp(rules.type.source, 'g'), m=>`<span class="tok-type">${m}</span>`);
-    if(rules.num) r = r.replace(new RegExp(rules.num.source, 'g'), m=>`<span class="tok-num">${m}</span>`);
-    return r;
-  }).join('\n');
+function highlight(code, lang) {
+  if (!code.trim()) {
+    currentLang = 'plaintext';
+    return '';
+  }
+  try {
+    if (lang && lang !== 'plaintext' && hljs.getLanguage(lang)) {
+      return hljs.highlight(code, { language: lang }).value;
+    }
+    const result = hljs.highlightAuto(code, ['javascript', 'typescript', 'python', 'html', 'css', 'json', 'c', 'cpp', 'java', 'bash', 'sql', 'php', 'rust', 'go', 'ruby']);
+    currentLang = result.language || 'plaintext';
+    return result.value;
+  } catch (e) {
+    console.error(e);
+    try {
+      const res = hljs.highlightAuto(code);
+      currentLang = res.language || 'plaintext';
+      return res.value;
+    } catch(err) {
+      currentLang = 'plaintext';
+      return code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+  }
 }
 
 function onCodeInput(){
   const ta = document.getElementById('code-textarea'), hl = document.getElementById('code-highlight'), lnEl = document.getElementById('line-nums');
   const code = ta.value;
-  hl.innerHTML = highlight(code, currentLang) + (code.endsWith('\n')?'\n':'');
+  const hlContent = highlight(code);
+  hl.innerHTML = hlContent + (code.endsWith('\n')?'\n':'');
+  document.getElementById('editor-lang-label').textContent = 'AUTO-DETECT: ' + currentLang.toUpperCase();
   const lc = code.split('\n').length;
   lnEl.innerHTML = Array.from({length:lc},(_,i)=>i+1).join('<br>');
   syncScroll(ta);
@@ -1267,7 +1512,7 @@ function connectForCode(){
     conn.on('open', () => setCodeRecvStatus('info','Connected! Fetching…'));
     conn.on('data', msg => { if(msg.type === 'code') receiveCode(msg); });
     conn.on('error', () => setCodeRecvStatus('error','Connection failed.'));
-    setTimeout(()=>{ if(!conn.open) setCodeRecvStatus('error','Timeout reaching sender.'); }, 15000);
+    setTimeout(()=>{ if(!conn.open) setCodeRecvStatus('error','Timeout reaching sender.'); }, 30000);
   });
 }
 
