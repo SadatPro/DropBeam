@@ -742,15 +742,14 @@ body::after {
 // CONFIGURATION & STATE
 // ══════════════════════════════════════════
 const MAX_SIZE = 500 * 1024 * 1024; // 500MB
-const CHUNK_SIZE = 128 * 1024; // 128KB chunks
-const BUFFER_THRESHOLD = 8 * 1024 * 1024; // 8MB buffer
+const CHUNK_SIZE = 64 * 1024; // 64KB chunks for max cross-browser compatibility
+const BUFFER_THRESHOLD = 1 * 1024 * 1024; // 1MB buffer to prevent mobile memory overflow
 const CIRC = 440; // SVG circle circumference
 
 const ICE_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:global.stun.twilio.com:3478' },
     { urls: 'turn:global.relay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
     { urls: 'turn:global.relay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
   ]
@@ -1041,7 +1040,6 @@ function setSendStatus(type, text){
 function sendInChunks(conn){
   const files = selectedFiles;
   let fileIndex = 0;
-  let currentOffset = 0;
   const totalSize = files.reduce((acc, f) => acc + f.size, 0);
   let totalSent = 0;
   
@@ -1049,13 +1047,12 @@ function sendInChunks(conn){
   let lastTotalSent = 0;
   const stopStream = startDataStream('send-canvas', 'send');
   
-  // Send overall batch metadata
   conn.send({
-    type: 'batch-meta',
-    count: files.length,
-    totalSize: totalSize,
+    type: 'batch-meta', count: files.length, totalSize: totalSize,
     files: files.map(f => ({ name: f.name, size: f.size, mime: f.type }))
   });
+  
+  let reader = null;
   
   function startNextFile() {
     if (fileIndex >= files.length) {
@@ -1063,53 +1060,50 @@ function sendInChunks(conn){
       finishSendBatch(stopStream, totalSize);
       return;
     }
-    
     const file = files[fileIndex];
-    currentOffset = 0;
+    const useComp = typeof CompressionStream !== 'undefined';
     
     conn.send({
-      type: 'file-start',
-      index: fileIndex,
-      name: file.name,
-      size: file.size,
-      mime: file.type
+      type: 'file-start', index: fileIndex, name: file.name,
+      size: file.size, mime: file.type, compressed: useComp
     });
     
-    sendFileChunk();
+    let stream = file.stream();
+    if (useComp) stream = stream.pipeThrough(new CompressionStream('deflate'));
+    reader = stream.getReader();
+    sendStreamChunk();
   }
   
-  function sendFileChunk(){
-    if(!activeConn || !activeConn.open) return; // Cancelled
-    
-    const file = files[fileIndex];
-    if(currentOffset >= file.size){
-      conn.send({type:'file-end', index: fileIndex});
-      fileIndex++;
-      setTimeout(startNextFile, 50); // Pause between files
-      return;
-    }
-    
-    const slice = file.slice(currentOffset, currentOffset + CHUNK_SIZE);
-    const reader = new FileReader();
-    reader.onload = e => {
-      try { conn.send({type:'chunk', data:e.target.result}); } catch(err) { return; }
-      currentOffset += slice.size;
-      totalSent += slice.size;
+  async function sendStreamChunk() {
+    if(!activeConn || !activeConn.open) return;
+    try {
+      const { done, value } = await reader.read();
+      if (done) {
+        conn.send({type:'file-end', index: fileIndex});
+        fileIndex++;
+        setTimeout(startNextFile, 50);
+        return;
+      }
+      
+      let offset = 0;
+      while (offset < value.length) {
+        const slice = value.slice(offset, offset + CHUNK_SIZE);
+        conn.send({type:'chunk', data: slice.buffer});
+        offset += CHUNK_SIZE;
+        totalSent += slice.byteLength;
+      }
       
       const now = Date.now(), iS = (now - lastTime)/1000;
       if (iS >= 0.5) {
         const iB = totalSent - lastTotalSent;
         const spd = iS > 0 ? iB/iS : 0, rem = totalSize - totalSent, eta = spd > 0 ? rem/spd : Infinity;
         const pct = Math.min(100, Math.round((totalSent/totalSize)*100));
-        
         setRing('send-ring', pct);
         document.getElementById('send-pct').textContent = pct + '%';
         document.getElementById('send-speed').textContent = fmtSpeed(spd);
         document.getElementById('send-sent').textContent = fmtBytes(totalSent);
         document.getElementById('send-eta').textContent = fmtEta(eta);
-        
-        lastTotalSent = totalSent;
-        lastTime = now;
+        lastTotalSent = totalSent; lastTime = now;
       } else {
         const pct = Math.min(100, Math.round((totalSent/totalSize)*100));
         setRing('send-ring', pct);
@@ -1118,16 +1112,13 @@ function sendInChunks(conn){
       }
       
       if(conn.dataChannel && conn.dataChannel.bufferedAmount > BUFFER_THRESHOLD) {
-        setTimeout(sendFileChunk, 50); 
+        setTimeout(sendStreamChunk, 50); 
       } else {
-        if (currentOffset % (CHUNK_SIZE * 32) === 0) {
-          setTimeout(sendFileChunk, 0); // Unwind recursion
-        } else {
-          sendFileChunk();
-        }
+        sendStreamChunk(); 
       }
-    };
-    reader.readAsArrayBuffer(slice);
+    } catch(err) {
+      console.error('Send stream error:', err);
+    }
   }
   
   startNextFile();
@@ -1170,7 +1161,7 @@ function connectToSender(){
       listenForFile(conn);
     });
     conn.on('error', () => setRecvStatus('error','Connection failed. Check code.'));
-    setTimeout(()=>{ if(!conn.open) setRecvStatus('error','Could not reach sender. Timeout.'); }, 30000);
+    setTimeout(()=>{ if(!conn.open) setRecvStatus('error','Could not reach sender. Timeout.'); }, 60000);
   });
   receiverPeer.on('error', err => setRecvStatus('error', 'Network error.'));
 }
@@ -1191,6 +1182,30 @@ function listenForFile(conn){
   let lastTime = Date.now(), lastRcv = 0;
   const stopStream = startDataStream('recv-canvas', 'recv');
   
+  let filesProcessed = 0;
+  let batchDoneReceived = false;
+
+  async function processReceivedFile(meta, chunks, cb) {
+    try {
+      let blob = new Blob(chunks, { type: meta.mime || 'application/octet-stream' });
+      if (meta.compressed && typeof DecompressionStream !== 'undefined') {
+        const ds = new DecompressionStream('deflate');
+        const decompressedStream = blob.stream().pipeThrough(ds);
+        blob = await new Response(decompressedStream).blob();
+      }
+      const url = URL.createObjectURL(blob);
+      receivedFiles.push({ name: meta.name, size: meta.size, mime: meta.mime, blob: blob, url: url });
+      filesProcessed++;
+      if(cb) cb(); else checkFinish();
+    } catch(e) { console.error('Decompression err:', e); filesProcessed++; checkFinish(); }
+  }
+
+  function checkFinish() {
+    if (batchDoneReceived && filesProcessed === (receivedBatchMeta ? receivedBatchMeta.count : 1)) {
+      finishReceiveBatch(stopStream);
+    }
+  }
+
   conn.on('data', msg => {
     if (msg.type === 'batch-meta') {
       receivedBatchMeta = msg;
@@ -1229,19 +1244,12 @@ function listenForFile(conn){
     } 
     else if (msg.type === 'file-end') {
       if (currentFileMeta) {
-        const blob = new Blob(currentFileChunks, { type: currentFileMeta.mime || 'application/octet-stream' });
-        const url = URL.createObjectURL(blob);
-        receivedFiles.push({
-          name: currentFileMeta.name,
-          size: currentFileMeta.size,
-          mime: currentFileMeta.mime,
-          blob: blob,
-          url: url
-        });
+        processReceivedFile(currentFileMeta, currentFileChunks);
       }
     } 
     else if (msg.type === 'batch-done') {
-      finishReceiveBatch(stopStream);
+      batchDoneReceived = true;
+      checkFinish();
     }
     // Backward compatibility for old single-file senders
     else if (msg.type === 'meta') {
@@ -1251,24 +1259,19 @@ function listenForFile(conn){
       currentFileChunks = [];
     } 
     else if (msg.type === 'done') {
+      batchDoneReceived = true;
       if (currentFileMeta) {
-        const blob = new Blob(currentFileChunks, { type: currentFileMeta.mime || 'application/octet-stream' });
-        const url = URL.createObjectURL(blob);
-        receivedFiles.push({
-          name: currentFileMeta.name,
-          size: currentFileMeta.size,
-          mime: currentFileMeta.mime,
-          blob: blob,
-          url: url
-        });
+        processReceivedFile(currentFileMeta, currentFileChunks);
+      } else {
+        checkFinish();
       }
-      finishReceiveBatch(stopStream);
     }
   });
   
   conn.on('close', () => {
     if (totalBatchReceived >= totalBatchSize && receivedFiles.length > 0) {
-      finishReceiveBatch(stopStream);
+      batchDoneReceived = true;
+      checkFinish();
     }
   });
 }
@@ -1505,14 +1508,14 @@ function connectForCode(){
   setCodeRecvStatus('info','Connecting…');
   
   if(codeRecvPeer) codeRecvPeer.destroy();
-  codeRecvPeer = new Peer({ debug: 0, config: ICE_CONFIG });
+  codeRecvPeer = new Peer({ debug: 0, config: ICE_CONFIG, pingInterval: 5000 });
   
   codeRecvPeer.on('open', () => {
     const conn = codeRecvPeer.connect(code, { reliable: true });
     conn.on('open', () => setCodeRecvStatus('info','Connected! Fetching…'));
     conn.on('data', msg => { if(msg.type === 'code') receiveCode(msg); });
     conn.on('error', () => setCodeRecvStatus('error','Connection failed.'));
-    setTimeout(()=>{ if(!conn.open) setCodeRecvStatus('error','Timeout reaching sender.'); }, 30000);
+    setTimeout(()=>{ if(!conn.open) setCodeRecvStatus('error','Timeout reaching sender.'); }, 60000);
   });
 }
 

@@ -746,15 +746,14 @@ body::after {
 // CONFIGURATION & STATE
 // ══════════════════════════════════════════
 const MAX_SIZE = 500 * 1024 * 1024; // 500MB
-const CHUNK_SIZE = 128 * 1024; // 128KB chunks
-const BUFFER_THRESHOLD = 8 * 1024 * 1024; // 8MB buffer
+const CHUNK_SIZE = 64 * 1024; // 64KB chunks for max cross-browser compatibility
+const BUFFER_THRESHOLD = 1 * 1024 * 1024; // 1MB buffer to prevent mobile memory overflow
 const CIRC = 440; // SVG circle circumference
 
 const ICE_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:global.stun.twilio.com:3478' },
     { urls: 'turn:global.relay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
     { urls: 'turn:global.relay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
   ]
@@ -974,17 +973,26 @@ function setSendStatus(type, text){
 function sendInChunks(conn){
   const file = selectedFile; let offset = 0, lastTime = Date.now(), lastOff = 0;
   const stopStream = startDataStream('send-canvas', 'send');
-  conn.send({type:'meta', name:file.name, size:file.size, mime:file.type});
+  const useComp = typeof CompressionStream !== 'undefined';
+  conn.send({type:'meta', name:file.name, size:file.size, mime:file.type, compressed: useComp});
   
-  function next(){
+  let stream = file.stream();
+  if (useComp) stream = stream.pipeThrough(new CompressionStream('deflate'));
+  const reader = stream.getReader();
+
+  async function next(){
     if(!activeConn || !activeConn.open) return; // Cancelled
-    if(offset >= file.size){ conn.send({type:'done'}); finishSend(stopStream, file); return; }
-    
-    const slice = file.slice(offset, offset + CHUNK_SIZE);
-    const reader = new FileReader();
-    reader.onload = e => {
-      try { conn.send({type:'chunk', data:e.target.result}); } catch(err) { return; }
-      offset += CHUNK_SIZE;
+    try {
+      const { done, value } = await reader.read();
+      if(done){ conn.send({type:'done'}); finishSend(stopStream, file); return; }
+      
+      let vOffset = 0;
+      while (vOffset < value.length) {
+        const slice = value.slice(vOffset, vOffset + CHUNK_SIZE);
+        conn.send({type:'chunk', data: slice.buffer});
+        vOffset += CHUNK_SIZE;
+        offset += slice.byteLength;
+      }
       
       const now = Date.now(), iB = offset - lastOff, iS = (now - lastTime)/1000; 
       lastOff = offset; lastTime = now;
@@ -1002,8 +1010,7 @@ function sendInChunks(conn){
       } else {
         next();
       }
-    };
-    reader.readAsArrayBuffer(slice);
+    } catch(err) { console.error('Send err:', err); }
   }
   next();
 }
@@ -1045,7 +1052,7 @@ function connectToSender(){
       listenForFile(conn);
     });
     conn.on('error', () => setRecvStatus('error','Connection failed. Check code.'));
-    setTimeout(()=>{ if(!conn.open) setRecvStatus('error','Could not reach sender. Timeout.'); }, 15000);
+    setTimeout(()=>{ if(!conn.open) setRecvStatus('error','Could not reach sender. Timeout.'); }, 60000);
   });
   receiverPeer.on('error', err => setRecvStatus('error', 'Network error.'));
 }
@@ -1061,6 +1068,21 @@ function listenForFile(conn){
   let lastTime = Date.now(), lastRcv = 0;
   const stopStream = startDataStream('recv-canvas', 'recv');
   
+  async function processAndFinish() {
+    try {
+      let blob = new Blob(receivedChunks, {type: receivedMeta ? receivedMeta.mime : 'application/octet-stream'});
+      if (receivedMeta && receivedMeta.compressed && typeof DecompressionStream !== 'undefined') {
+        const ds = new DecompressionStream('deflate');
+        const decompressedStream = blob.stream().pipeThrough(ds);
+        blob = await new Response(decompressedStream).blob();
+      }
+      receivedChunks = [blob];
+    } catch(err) {
+      console.error('Decompression err:', err);
+    }
+    finishReceive(stopStream);
+  }
+
   conn.on('data', msg => {
     if(msg.type === 'meta'){ receivedMeta = msg; }
     else if(msg.type === 'chunk'){
@@ -1078,9 +1100,9 @@ function listenForFile(conn){
         document.getElementById('recv-eta').textContent = fmtEta(eta);
       }
     }
-    else if(msg.type === 'done') finishReceive(stopStream);
+    else if(msg.type === 'done') processAndFinish();
   });
-  conn.on('close', () => { if(receivedMeta && receivedChunks.length && totalReceived >= receivedMeta.size) finishReceive(stopStream); });
+  conn.on('close', () => { if(receivedMeta && receivedChunks.length && totalReceived >= receivedMeta.size) processAndFinish(); });
 }
 
 function finishReceive(stopStream){
@@ -1267,7 +1289,7 @@ function connectForCode(){
     conn.on('open', () => setCodeRecvStatus('info','Connected! Fetching…'));
     conn.on('data', msg => { if(msg.type === 'code') receiveCode(msg); });
     conn.on('error', () => setCodeRecvStatus('error','Connection failed.'));
-    setTimeout(()=>{ if(!conn.open) setCodeRecvStatus('error','Timeout reaching sender.'); }, 15000);
+    setTimeout(()=>{ if(!conn.open) setCodeRecvStatus('error','Timeout reaching sender.'); }, 60000);
   });
 }
 
