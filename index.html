@@ -362,6 +362,9 @@ body::before {
   </div>
   <div class="header-actions">
     <div class="app-bar-chip">SECURE P2P</div>
+    <button class="coffee-btn" style="padding: 10px; width: 44px; justify-content: center;" onclick="openSettings()" title="Network Settings">
+      <span class="material-icons-round">settings</span>
+    </button>
     <button class="coffee-btn" onclick="openAbout()" title="Support & About">
       <span class="material-icons-round">local_cafe</span>
       <span class="coffee-text">Buy me a Coffee</span>
@@ -659,7 +662,31 @@ body::before {
         </div>
         <div class="support-qr-wrap"><div id="support-qr"></div></div>
         <div style="font-size:11px;color:var(--warning);margin-top:8px;font-family:var(--font-mono);letter-spacing:1px;">SCAN TO PAY</div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal-backdrop" id="settings-modal" onclick="if(event.target===this)closeSettings()">
+  <div class="modal-surface">
+    <div class="modal-header">
+      <h3 class="modal-title"><span class="material-icons-round">router</span> Network Settings</h3>
+      <button class="modal-close" onclick="closeSettings()"><span class="material-icons-round">close</span></button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:14px; color:var(--text-muted); line-height:1.6; margin-top:0;">
+        If you are having trouble connecting over mobile data or strict networks, provide a custom TURN server API key to securely relay your connection.
+      </p>
+      <div style="background:#F8FAFC; padding:16px; border-radius:var(--radius-sm); border:1px solid rgba(0,0,0,0.06); margin-top:8px;">
+        <label style="font-size:13px; font-weight:700; color:var(--text-main); margin-bottom:8px; display:block;">Metered.ca API Key</label>
+        <input type="text" id="turn-api-key" class="md-text-input" style="height:48px; font-size:14px; letter-spacing:1px; text-align:left; padding:0 16px;" placeholder="Paste API key here...">
+        <div style="font-size:12px; color:var(--text-muted); margin-top:12px;">
+          Get a free 50GB/mo key at <a href="https://metered.ca/stun-turn" target="_blank" style="color:var(--primary); font-weight:600; text-decoration:none;">metered.ca</a>
+        </div>
       </div>
+      <button class="md-btn md-btn-filled md-btn-full" onclick="saveSettings()" style="margin-top:16px;" id="save-settings-btn">
+        <span class="material-icons-round">save</span> SAVE SETTINGS
+      </button>
     </div>
   </div>
 </div>
@@ -692,50 +719,54 @@ const CHUNK_SIZE = 256 * 1024;
 const BUFFER_LOW  = 512 * 1024;   // Resume threshold: 512KB
 const BUFFER_HIGH = 4 * 1024 * 1024; // Pause threshold: 4MB
 
-// ── GOD MODE ICE CONFIG ─────────────────────────────────────────────
-// Priority order: Google STUN → Cloudflare STUN → Metered TURN → freeturn
-// Metered.ca free tier: most reliable free TURN provider as of 2025
-// freeturn.net: independent backup
-const ICE_CONFIG = {
-  iceServers: [
-    // STUN — always try direct first (fastest, no relay overhead)
+// ── GOD MODE ICE CONFIG GENERATOR ───────────────────────────────────
+function getPeerConfig() {
+  const customKey = localStorage.getItem('syncdrop_turn_key');
+  const servers = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun.cloudflare.com:3478' },
-    // TURN via openrelay (UDP+TCP+TLS) - Crucial for internet NAT traversal
-    {
-      urls: [
-        'turn:openrelay.metered.ca:80',
-        'turn:openrelay.metered.ca:443',
-        'turn:openrelay.metered.ca:443?transport=tcp'
-      ],
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    // TURN via freeturn.net — independent fallback
-    {
-      urls: [
-        'turn:freeturn.net:3478',
-        'turns:freeturn.net:5349'
-      ],
-      username: 'free',
-      credential: 'free'
-    }
-  ],
-  iceCandidatePoolSize: 10,
-  iceTransportPolicy: 'all',
-  bundlePolicy: 'max-bundle',
-  rtcpMuxPolicy: 'require'
-};
+    { urls: 'stun:stun.cloudflare.com:3478' }
+  ];
 
-// PeerJS config — explicit cloud server to avoid DNS flakiness
-const PEER_CONFIG = {
-  host: 'peerjs.92k.de', // Stable public server fallback
-  port: 443,
-  secure: true,
-  debug: 0,
-  config: ICE_CONFIG
-};
+  if (customKey && customKey.trim().length > 5) {
+    const key = customKey.trim();
+    servers.push({
+      urls: [
+        `turn:${key}.relay.metered.ca:80`,
+        `turn:${key}.relay.metered.ca:443`,
+        `turn:${key}.relay.metered.ca:443?transport=tcp`
+      ],
+      username: key,
+      credential: key
+    });
+  } else {
+    // Fallback free servers
+    servers.push(
+      {
+        urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp'],
+        username: 'openrelayproject', credential: 'openrelayproject'
+      },
+      {
+        urls: ['turn:freeturn.net:3478', 'turns:freeturn.net:5349'],
+        username: 'free', credential: 'free'
+      }
+    );
+  }
+
+  return {
+    host: 'peerjs.92k.de',
+    port: 443,
+    secure: true,
+    debug: 0,
+    config: {
+      iceServers: servers,
+      iceCandidatePoolSize: 10,
+      iceTransportPolicy: 'all',
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require'
+    }
+  };
+}
 
 // ── BINARY WIRE PROTOCOL ────────────────────────────────────────────
 // Instead of JSON-wrapping every chunk (huge overhead), we use:
@@ -848,7 +879,7 @@ function copyShareLink(btnId,isCodeTab=false){
 function initPeer(customId){
   return new Promise((resolve,reject)=>{
     const id=customId||genCode();
-    const peer=new Peer(id,PEER_CONFIG);
+    const peer=new Peer(id,getPeerConfig());
     let resolved=false;
 
     const timeout=setTimeout(()=>{
@@ -1190,7 +1221,7 @@ function connectToSender(){
   setRecvStatus('info','Connecting to sender…');
   if(receiverPeer){try{receiverPeer.destroy();}catch(e){}}
   
-  receiverPeer=new Peer(PEER_CONFIG);
+  receiverPeer=new Peer(getPeerConfig());
 
   receiverPeer.on('open',myId=>{
     console.log('[SyncDrop] Receiver peer opened, connecting to:',code);
@@ -1400,6 +1431,30 @@ function openAbout(){
   if(!supportQrGenerated){new QRCode(document.getElementById('support-qr'),{text:"01309250507",width:140,height:140,colorDark:"#000000",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M});supportQrGenerated=true;}
 }
 function closeAbout(){document.getElementById('about-modal').classList.remove('open');}
+
+// ── SETTINGS MODAL ────────────────────────────────────────────────────
+function openSettings(){
+  const key = localStorage.getItem('syncdrop_turn_key') || '';
+  document.getElementById('turn-api-key').value = key;
+  document.getElementById('settings-modal').classList.add('open');
+}
+function closeSettings(){
+  document.getElementById('settings-modal').classList.remove('open');
+}
+function saveSettings(){
+  const key = document.getElementById('turn-api-key').value.trim();
+  if(key) localStorage.setItem('syncdrop_turn_key', key);
+  else localStorage.removeItem('syncdrop_turn_key');
+  
+  const btn = document.getElementById('save-settings-btn');
+  btn.innerHTML = '<span class="material-icons-round">check</span> SAVED!';
+  btn.classList.add('copied');
+  setTimeout(()=>{
+    btn.innerHTML = '<span class="material-icons-round">save</span> SAVE SETTINGS';
+    btn.classList.remove('copied');
+    closeSettings();
+  }, 1000);
+}
 
 // ── CODE EDITOR ───────────────────────────────────────────────────────
 const EXT_MAP={python:'py',javascript:'js',typescript:'ts',html:'html',css:'css',json:'json',c:'c',cpp:'cpp',java:'java',bash:'sh',sql:'sql',php:'php',rust:'rs',go:'go',ruby:'rb',plaintext:'txt'};
