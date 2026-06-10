@@ -724,8 +724,14 @@ const BUFFER_HIGH = 4 * 1024 * 1024; // Pause threshold: 4MB
 
 // ── GOD MODE ICE CONFIG GENERATOR ───────────────────────────────────
 function getPeerConfig() {
-  const customKey = localStorage.getItem('syncdrop_turn_key');
-  const sigUrl = localStorage.getItem('syncdrop_sig_url');
+  let customKey = '';
+  let sigUrl = '';
+  try {
+    customKey = localStorage.getItem('syncdrop_turn_key');
+    sigUrl = localStorage.getItem('syncdrop_sig_url');
+  } catch(e) {
+    console.warn("localStorage is disabled in this environment.");
+  }
   
   let options = {
     debug: 2,
@@ -1458,8 +1464,12 @@ function closeAbout(){document.getElementById('about-modal').classList.remove('o
 
 // ── SETTINGS MODAL ────────────────────────────────────────────────────
 function openSettings(){
-  const turnKey = localStorage.getItem('syncdrop_turn_key') || '';
-  const sigUrl = localStorage.getItem('syncdrop_sig_url') || '';
+  let turnKey = '';
+  let sigUrl = '';
+  try {
+    turnKey = localStorage.getItem('syncdrop_turn_key') || '';
+    sigUrl = localStorage.getItem('syncdrop_sig_url') || '';
+  } catch(e) {}
   document.getElementById('turn-api-key').value = turnKey;
   document.getElementById('signaling-url').value = sigUrl;
   document.getElementById('settings-modal').classList.add('open');
@@ -1470,10 +1480,14 @@ function closeSettings(){
 function saveSettings(){
   const turnKey = document.getElementById('turn-api-key').value.trim();
   const sigUrl = document.getElementById('signaling-url').value.trim();
-  if(turnKey) localStorage.setItem('syncdrop_turn_key', turnKey);
-  else localStorage.removeItem('syncdrop_turn_key');
-  if(sigUrl) localStorage.setItem('syncdrop_sig_url', sigUrl);
-  else localStorage.removeItem('syncdrop_sig_url');
+  try {
+    if(turnKey) localStorage.setItem('syncdrop_turn_key', turnKey);
+    else localStorage.removeItem('syncdrop_turn_key');
+    if(sigUrl) localStorage.setItem('syncdrop_sig_url', sigUrl);
+    else localStorage.removeItem('syncdrop_sig_url');
+  } catch(e) {
+    alert("Warning: Your browser is blocking settings from being saved because you opened the file directly (file://). Please host the app on Netlify or a local server to save settings permanently!");
+  }
   
   const btn = document.getElementById('save-settings-btn');
   btn.innerHTML = '<span class="material-icons-round">check</span> SAVED!';
