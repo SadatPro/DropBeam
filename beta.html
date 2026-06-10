@@ -744,14 +744,23 @@ function getPeerConfig() {
   }
 
   // DEFAULT BEHAVIOR (Matches beta.html)
-  // Include standard STUN servers to fix local network (mDNS) issues between mobile and desktop
+  // Include standard STUN servers and a free public TURN server to fix connections across symmetric NATs (mobile data)
   return {
     debug: 2,
     config: {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun.cloudflare.com:3478' },
-        { urls: 'stun:stun.services.mozilla.com' }
+        { urls: 'stun:stun.services.mozilla.com' },
+        {
+          urls: [
+            'turn:openrelay.metered.ca:80',
+            'turn:openrelay.metered.ca:443',
+            'turn:openrelay.metered.ca:443?transport=tcp'
+          ],
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
       ]
     }
   };

@@ -1,0 +1,12 @@
+{
+  "name": "syncdrop-peer-server",
+  "version": "1.0.0",
+  "description": "Private PeerJS signaling server for SyncDrop",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "peer": "^1.0.2"
+  }
+}

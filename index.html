@@ -362,6 +362,9 @@ body::before {
   </div>
   <div class="header-actions">
     <div class="app-bar-chip">SECURE P2P</div>
+    <button class="coffee-btn" onclick="openSettings()" title="Network Settings" style="color: var(--primary); border-color: var(--primary-light);">
+      <span class="material-icons-round">router</span>
+    </button>
     <button class="coffee-btn" onclick="openAbout()" title="Support & About">
       <span class="material-icons-round">local_cafe</span>
       <span class="coffee-text">Buy me a Coffee</span>
@@ -663,6 +666,34 @@ body::before {
   </div>
 </div>
 
+<!-- Settings Modal -->
+<div class="modal-backdrop" id="settings-modal" onclick="if(event.target===this)closeSettings()">
+  <div class="modal-surface">
+    <div class="modal-header">
+      <h3 class="modal-title"><span class="material-icons-round">router</span> Network Settings</h3>
+      <button class="modal-close" onclick="closeSettings()"><span class="material-icons-round">close</span></button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:14px; color:var(--text-muted); line-height:1.6; margin-top:0;">
+        If you are having trouble connecting over mobile data or strict networks, provide a custom TURN server API key to securely relay your connection.
+      </p>
+      <div style="background:#F8FAFC; padding:16px; border-radius:var(--radius-sm); border:1px solid rgba(0,0,0,0.06); margin-top:8px;">
+        <label style="font-size:13px; font-weight:700; color:var(--text-main); margin-bottom:8px; display:block;">Signaling Server URL (Optional)</label>
+        <input type="text" id="signaling-url" class="md-text-input" style="height:48px; font-size:14px; letter-spacing:1px; text-align:left; padding:0 16px; margin-bottom: 16px;" placeholder="e.g. my-server.onrender.com">
+        
+        <label style="font-size:13px; font-weight:700; color:var(--text-main); margin-bottom:8px; display:block;">Metered.ca API Key (TURN)</label>
+        <input type="text" id="turn-api-key" class="md-text-input" style="height:48px; font-size:14px; letter-spacing:1px; text-align:left; padding:0 16px;" placeholder="Paste API key here...">
+        <div style="font-size:12px; color:var(--text-muted); margin-top:12px;">
+          Get a free 50GB/mo key at <a href="https://metered.ca/stun-turn" target="_blank" style="color:var(--primary); font-weight:600; text-decoration:none;">metered.ca</a>
+        </div>
+      </div>
+      <button class="md-btn md-btn-filled md-btn-full" onclick="saveSettings()" style="margin-top:16px;" id="save-settings-btn">
+        <span class="material-icons-round">save</span> SAVE SETTINGS
+      </button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║            SYNCDROP — GOD MODE ENGINE v2.0                      ║
@@ -694,42 +725,58 @@ const BUFFER_HIGH = 4 * 1024 * 1024; // Pause threshold: 4MB
 // ── GOD MODE ICE CONFIG GENERATOR ───────────────────────────────────
 function getPeerConfig() {
   const customKey = localStorage.getItem('syncdrop_turn_key');
+  const sigUrl = localStorage.getItem('syncdrop_sig_url');
   
+  let options = {
+    debug: 2,
+    config: {
+      iceServers: []
+    }
+  };
+
+  if (sigUrl && sigUrl.trim().length > 0) {
+    let host = sigUrl.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
+    options.host = host;
+    options.port = 443;
+    options.secure = true;
+    options.path = '/';
+  }
+
   // If user provided a custom API key, use Metered's TURN + Custom STUN
   if (customKey && customKey.trim().length > 5) {
     const key = customKey.trim();
-    return {
-      debug: 2,
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun.cloudflare.com:3478' },
-          {
-            urls: [
-              `turn:${key}.relay.metered.ca:80`,
-              `turn:${key}.relay.metered.ca:443`,
-              `turn:${key}.relay.metered.ca:443?transport=tcp`
-            ],
-            username: key,
-            credential: key
-          }
-        ]
+    options.config.iceServers = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      {
+        urls: [
+          `turn:${key}.relay.metered.ca:80`,
+          `turn:${key}.relay.metered.ca:443`,
+          `turn:${key}.relay.metered.ca:443?transport=tcp`
+        ],
+        username: key,
+        credential: key
       }
-    };
+    ];
+  } else {
+    // DEFAULT BEHAVIOR
+    options.config.iceServers = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'stun:stun.services.mozilla.com' },
+      {
+        urls: [
+          'turn:openrelay.metered.ca:80',
+          'turn:openrelay.metered.ca:443',
+          'turn:openrelay.metered.ca:443?transport=tcp'
+        ],
+        username: 'openrelayproject',
+        credential: 'openrelayproject'
+      }
+    ];
   }
 
-  // DEFAULT BEHAVIOR (Matches beta.html)
-  // Include standard STUN servers to fix local network (mDNS) issues between mobile and desktop
-  return {
-    debug: 2,
-    config: {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun.cloudflare.com:3478' },
-        { urls: 'stun:stun.services.mozilla.com' }
-      ]
-    }
-  };
+  return options;
 }
 
 // ── BINARY WIRE PROTOCOL ────────────────────────────────────────────
@@ -1411,17 +1458,22 @@ function closeAbout(){document.getElementById('about-modal').classList.remove('o
 
 // ── SETTINGS MODAL ────────────────────────────────────────────────────
 function openSettings(){
-  const key = localStorage.getItem('syncdrop_turn_key') || '';
-  document.getElementById('turn-api-key').value = key;
+  const turnKey = localStorage.getItem('syncdrop_turn_key') || '';
+  const sigUrl = localStorage.getItem('syncdrop_sig_url') || '';
+  document.getElementById('turn-api-key').value = turnKey;
+  document.getElementById('signaling-url').value = sigUrl;
   document.getElementById('settings-modal').classList.add('open');
 }
 function closeSettings(){
   document.getElementById('settings-modal').classList.remove('open');
 }
 function saveSettings(){
-  const key = document.getElementById('turn-api-key').value.trim();
-  if(key) localStorage.setItem('syncdrop_turn_key', key);
+  const turnKey = document.getElementById('turn-api-key').value.trim();
+  const sigUrl = document.getElementById('signaling-url').value.trim();
+  if(turnKey) localStorage.setItem('syncdrop_turn_key', turnKey);
   else localStorage.removeItem('syncdrop_turn_key');
+  if(sigUrl) localStorage.setItem('syncdrop_sig_url', sigUrl);
+  else localStorage.removeItem('syncdrop_sig_url');
   
   const btn = document.getElementById('save-settings-btn');
   btn.innerHTML = '<span class="material-icons-round">check</span> SAVED!';
