@@ -1239,22 +1239,6 @@ function handleFileSelect(files){
   });
   updateFilePreviewList();
   
-  // Auto-send files since there's no send button in modern UI
-  if(typeof activeConnections !== 'undefined' && activeConnections.length > 0) {
-      activeConnections.forEach(conn => {
-          if(conn.open) {
-              if(typeof sendInChunks === 'function') sendInChunks(conn);
-          } else {
-              conn.on('open', () => {
-                  setTimeout(() => {
-                      if(conn.open && typeof sendInChunks === 'function') sendInChunks(conn);
-                  }, 500);
-              });
-          }
-      });
-  } else {
-      cancelTransfer();
-  }
 }
 
 function updateFilePreviewList(){
