@@ -1550,32 +1550,75 @@ function sendInChunks(conn){
     }
   }
 
+  // Get the raw RTCDataChannel for bufferedAmount monitoring
+  let dc=null;
+  
+  // Send control message as JSON string
+  function ctrl(obj){conn.send(JSON.stringify(obj));}
+
+  ctrl({type:'batch-meta',count:files.length,totalSize,files:files.map(f=>({name:f.name,size:f.size,mime:f.type}))});
+
+  function waitDrain(dataChannel){
+    return new Promise(resolve=>{
+      if(!dataChannel||dataChannel.bufferedAmount<=BUFFER_LOW){resolve();return;}
+      const prev=dataChannel.bufferedAmountLowThreshold;
+      dataChannel.bufferedAmountLowThreshold=BUFFER_LOW;
+      dataChannel.onbufferedamountlow=()=>{
+        dataChannel.onbufferedamountlow=null;
+        dataChannel.bufferedAmountLowThreshold=prev;
+        resolve();
+      };
+      // Safety fallback: resolve after 2s even if drain event doesn't fire
+      setTimeout(resolve,2000);
+    });
+  }
+
+  // Helper to read a slice of the file into an ArrayBuffer asynchronously
+  function readSlice(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = e => resolve(e.target.result);
+      reader.onerror = e => reject(e);
+      reader.readAsArrayBuffer(blob);
+    });
+  }
+
   async function sendAll(){
-    // Native PeerJS transfer
     try {
+      dc=conn.dataChannel;
       for(let i=0;i<files.length;i++){
-        setSendStatus('info',`Sending file ${i+1} of ${files.length}… (${files[i].name})`);
+        const file=files[i];
+        setSendStatus('info',`Sending file ${i+1} of ${files.length}… (${file.name})`);
+        ctrl({type:'file-start',name:file.name,size:file.size,mime:file.type});
         
-        // Native chunking delegation
-        conn.send({
-           type: 'native-file',
-           name: files[i].name,
-           size: files[i].size,
-           mime: files[i].type,
-           file: files[i]
-        });
-        
-        totalSent += files[i].size;
-        updateUI(totalSent, totalSize);
-        await new Promise(r=>setTimeout(r,500)); // small gap between files
+        let offset=0;
+        while(offset<file.size&&transferActive){
+          if(dc&&dc.bufferedAmount>BUFFER_HIGH){
+            setSendStatus('warn','Network congested, pausing upload…');
+            await waitDrain(dc);
+            setSendStatus('info',`Sending file ${i+1} of ${files.length}… (${file.name})`);
+          }
+          const end=Math.min(offset+CHUNK_SIZE,file.size);
+          const chunk=await readSlice(file.slice(offset,end));
+          conn.send(chunk);
+          offset+=chunk.byteLength;
+          totalSent+=chunk.byteLength;
+          
+          if(offset===file.size || offset%(CHUNK_SIZE*16)===0){
+            updateUI(totalSent,totalSize);
+            await new Promise(r=>setTimeout(r,0));
+          }
+        }
+        ctrl({type:'file-end'});
+        if(!transferActive)break;
       }
-      conn.send(JSON.stringify({type:'batch-done'}));
-      if(diagInterval) clearInterval(diagInterval);
-      finishSendBatch(stopStream,totalSize);
-    } catch (err) {
+      if(transferActive){
+        ctrl({type:'batch-done'});
+        finishSendBatch(stopStream,totalSize);
+      }
+    } catch(err){
       console.error('Send error:',err);
       setSendStatus('error','Transfer error: '+err.message);
-      if(diagInterval) clearInterval(diagInterval);
       stopStream();
     }
   }
@@ -1717,29 +1760,35 @@ function listenForFile(conn){
 
   conn.on('data',msg=>{
     if(!msg)return;
-    
     if(typeof msg==='string'){
       let obj;try{obj=JSON.parse(msg);}catch(e){return;}
       if(obj.type==='code-share'){ window.dispatchEvent(new CustomEvent('code-share-received', {detail: obj.content})); }
-      else if(obj.type==='batch-done'){
+      else if(obj.type==='batch-meta'){ 
+        receivedBatchMeta=obj;totalBatchSize=obj.totalSize||1;
+      } else if(obj.type==='file-start'){
+        currentFileMeta=obj;currentFileChunks=[];
+      } else if(obj.type==='file-end'){
+        if(currentFileMeta){pendingProcessing++;processFile({...currentFileMeta},[...currentFileChunks]);currentFileChunks=[];currentFileMeta=null;}
+      } else if(obj.type==='batch-done'){
         batchDoneReceived=true;checkFinish();
       }
-    } else if(typeof msg==='object' && msg.type === 'native-file'){
-      // Native File Handling! PeerJS automatically reassembled it!
-      const file = msg.file; // This is a Blob/File
-      const url = URL.createObjectURL(file);
-      receivedFiles.push({name: msg.name, size: msg.size, mime: msg.mime, blob: file, url});
+    } else {
+      // Raw ArrayBuffer chunk
+      let data;
+      if(msg instanceof ArrayBuffer) data=msg;
+      else if(msg instanceof Uint8Array) data=msg.buffer.slice(msg.byteOffset,msg.byteOffset+msg.byteLength);
+      else if(msg.buffer) data=msg.buffer;
+      else return;
       
-      totalBatchReceived += msg.size;
-      totalBatchSize = totalBatchSize < totalBatchReceived ? totalBatchReceived : totalBatchSize;
-      
-      filesProcessed++;
+      currentFileChunks.push(data);
+      totalBatchReceived+=data.byteLength;
+      updateUI(totalBatchReceived,totalBatchSize);
       
       // Update Modern UI Stats
       const modernStats = document.getElementById('modern-transfer-stats');
       if(modernStats) modernStats.textContent = `${fmtBytes(totalBatchReceived)} of ${fmtBytes(totalBatchSize || totalBatchReceived)}`;
       const modernProgress = document.getElementById('modern-progress-fill');
-      if(modernProgress) modernProgress.style.width = '100%';
+      if(modernProgress) modernProgress.style.width = Math.min(100, Math.round((totalBatchReceived/totalBatchSize)*100)) + '%';
     }
   });
 
