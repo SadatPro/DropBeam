@@ -379,9 +379,22 @@ body {
   padding: 0;
   margin: 0;
 }
+.app-wrapper {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  width: 100%;
+  padding: 0;
+}
 @media (min-width: 768px) {
-  body {
-    padding: 60px 20px;
+  .app-wrapper {
+    padding: 20px;
+  }
+  .app-wrapper::before,
+  .app-wrapper::after {
+    content: '';
+    flex: 1;
+    min-height: 20px;
   }
 }
 
@@ -616,6 +629,7 @@ body {
 <body data-theme="dark">
 <div class="bg-mesh"></div>
 
+<div class="app-wrapper">
 <div class="app-container">
   <div class="app-content">
     
@@ -767,6 +781,7 @@ body {
     </div>
   </div>
 
+</div>
 </div>
 
 <script>
