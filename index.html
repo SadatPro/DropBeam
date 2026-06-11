@@ -1626,58 +1626,37 @@ function sendInChunks(conn){
     });
   }
 
-  async function sendFile(file,fileIndex){
-    ctrl({type:'file-start',index:fileIndex,name:file.name,size:file.size,mime:file.type});
-    
-    let offset=0,localChunks=0;
-    dc=conn.dataChannel;
-
-    while(offset<file.size){
-      if(!transferActive||!conn.open)return false;
-      // GOD MODE backpressure: pause if buffer is too full
-      if(dc&&dc.bufferedAmount>BUFFER_HIGH){
-        await waitDrain(dc);
-        if(!transferActive||!conn.open)return false;
-      }
-      
-      const slice = file.slice(offset, offset + CHUNK_SIZE);
-      const chunk = await readSlice(slice);
-      
-      // GOD MODE: send raw ArrayBuffer — no JSON wrapper
-      try {
-          conn.send(chunk);
-      } catch (err) {
-          console.error("Critical Send Error:", err);
-          alert("Network Drop: Transfer failed while sending. Please reconnect.");
-          return false;
-      }
-      offset+=chunk.byteLength;totalSent+=chunk.byteLength;chunksSent++;localChunks++;
-      updateUI(totalSent,totalSize);
-      // Yield to event loop every 8 chunks to prevent mobile browser lockups
-      if(localChunks%8===0)await new Promise(r=>setTimeout(r,5));
-    }
-    ctrl({type:'file-end',index:fileIndex});
-    return true;
-  }
-
   async function sendAll(){
-    for(let i=0;i<files.length;i++){
-      setSendStatus('info',`Sending file ${i+1} of ${files.length}… (${files[i].name})`);
-      const ok=await sendFile(files[i],i);
-      if(!ok)return;
-      await new Promise(r=>setTimeout(r,50));
+    // Native PeerJS transfer
+    try {
+      for(let i=0;i<files.length;i++){
+        setSendStatus('info',`Sending file ${i+1} of ${files.length}… (${files[i].name})`);
+        
+        // Native chunking delegation
+        conn.send({
+           type: 'native-file',
+           name: files[i].name,
+           size: files[i].size,
+           mime: files[i].type,
+           file: files[i]
+        });
+        
+        totalSent += files[i].size;
+        updateUI(totalSent, totalSize);
+        await new Promise(r=>setTimeout(r,500)); // small gap between files
+      }
+      conn.send(JSON.stringify({type:'batch-done'}));
+      clearInterval(diagInterval);diagInterval=null;
+      finishSendBatch(stopStream,totalSize);
+    } catch (err) {
+      console.error('Send error:',err);
+      setSendStatus('error','Transfer error: '+err.message);
+      clearInterval(diagInterval);diagInterval=null;
+      stopStream();
     }
-    ctrl({type:'batch-done'});
-    clearInterval(diagInterval);diagInterval=null;
-    finishSendBatch(stopStream,totalSize);
   }
 
-  sendAll().catch(err=>{
-    console.error('Send error:',err);
-    setSendStatus('error','Transfer error: '+err.message);
-    clearInterval(diagInterval);diagInterval=null;
-    stopStream();
-  });
+  sendAll();
 }
 
 function finishSendBatch(stopStream,totalSize){
